@@ -14,12 +14,8 @@ And coded into python by Philip Usher (University of Bristol)
 import numpy as np
 import statsmodels.api as sm
 from mtspec import mtspec
-
-
-def calc_mtspec(obspy_trace):
-    """A function to calculate a spectral multi-taper Fourier transform"""
-    
-    return freq,amp
+from readrotate import readandrotate
+from obspy.core import read,Stream
     
 def linearfit(x, y, y_weights):
     """Robust Linear Regression to fit of x and y a straight line and return the gradient with an error
@@ -47,10 +43,10 @@ def linearfit(x, y, y_weights):
 
             
    
-def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,noise_trace,noise_ref,snr_limit=1):
+def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,trace_noise_spectra,snr_limit=1):
     """Returns delta t star between the two traces (trace and ref)
     
-    This is an implemntation of the log spectral ratio method to measure delta
+    This is an implementation of the log spectral ratio method to measure delta
     t star.
     Arguments:
         
@@ -67,8 +63,8 @@ def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,noise_trace,noise_ref,snr_li
     """
     
     #Calculate the snr, lsr and y weights for the trace and the reference
-    snr=trace_spectra/noise_trace
-    snr_ref=ref_spectra/noise_ref
+    snr=trace_spectra/trace_noise_spectra
+    snr_ref=ref_spectra/trace_noise_spectra
     lsr=np.log(trace_spectra/ref_spectra)
     y_weights=(snr+snr_ref)/2 
     
@@ -84,7 +80,109 @@ def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,noise_trace,noise_ref,snr_li
         meas_tstar_error=np.nan
     
     return meas_tstar,meas_tstar_error
+
+def cross_correlate(trace1,trace2):
+    """Returns the correlation coefficient from two obspy traces"""
+    corr_coef = np.corrcoef(trace1.data,trace2.data)
+    xcorr = corr_coef[0,1]
+    return xcorr
     
+def window_trace(st,before_p,after_p):
+    """Cuts a window around an obspy trace using a before and after p pick time (sec)"""
+    p_st = Stream()
+    for tr in st:
+        #Removing traces without p picks
+        if tr.stats.sac['t0'] != -12345.0:
+            
+            p_pick=tr.stats.starttime+tr.stats.sac['t0']
+            p_tr = tr.slice(p_pick-before_p,p_pick+after_p)
+            p_st.append(p_tr)
+    
+                
+    return p_st
+
+def noise_window_trace(st,window_len_time):
+    """Get noise window for st"""
+    noise_st = Stream()
+    for tr in st:
+        noise_tr = tr.slice(tr.stats.starttime,tr.stats.starttime+window_len_time)
+        noise_st.append(noise_tr)
+    return noise_st
+    
+def get_p(st):
+    """Get the P-wave trace"""
+    p_traces = st.select(component="L")
+    
+    return p_traces
+    
+
+def mean_corr(evnm1,evnm2):
+    """Calculate the mean correlation between two events"""
+    
+    st = readandrotate(evnm1,stns='*',ext='[E,N,Z]')
+    st2 = readandrotate(evnm2,stns='*',ext='[E,N,Z]')
+ 
+def calc_mtspec(tr):
+    """Do mtspec on a trace"""
+    nfft = len(tr.data)*2
+    spec_den,freq = mtspec(tr.data,tr.stats.delta,3.5,nfft=nfft) 
+    amp = np.sqrt(spec_den)
+    return amp,freq 
+ 
+def get_and_check_window_len(st,st2):
+    len_st=[]
+    for tr in st:
+        len_st.append(len(tr.data))
+    for tr in st2:
+        len_st.append(len(tr.data))
+        
+    assert all(x==len_st[0] for x in len_st)
+    
+    return len_st[0]
+    
+def dts_p(evnm1,evnm_ref,fmin,fmax,snr,station='001',p_before=0.1,p_after=0.2):
+    
+    #Reading in the Events
+    st = readandrotate(evnm1,stns=station,ext='[E,N,Z]')
+    st_ref = readandrotate(evnm_ref,stns=station,ext='[E,N,Z]')
+    
+    
+    #Get the P components
+    st = get_p(st)
+    st_ref = get_p(st_ref)
+    
+    assert len(st) ==1
+    assert len(st_ref) ==1
+    
+    # Slice of the P-wave windows
+    st_p = window_trace(st,p_before,p_after)
+    st_ref_p = window_trace(st,p_before,p_after)
+    
+    assert len(st_p) != 0
+    assert len(st_ref_p) != 0
+    
+    # Finds the length of P window in samples and checks all the windows are the same length
+    window_len_samples = get_and_check_window_len(st_p,st_ref_p)
+    window_len_time = p_before + p_after
+    # Calculates the noise window
+    # Note uses the beginning of the trace if the P wave is near the beginning it will overlap
+    st_n = noise_window_trace(st,window_len_time)
+    st_ref_n = noise_window_trace(st,window_len_time)
+    
+    #Calulate power spectral density of P,Noise for event and reference
+    fft_p,freq = calc_mtspec(st_p[0])
+    fft_n,freq = calc_mtspec(st_n[0])
+    
+    fft_ref_p,freq = calc_mtspec(st_ref_p[0])
+    fft_ref_n,freq = calc_mtspec(st_ref_n[0])
+    
+    
+    meas_tstar,meas_tstar_error = bs_lsr(fft_p,
+            fft_ref_p,freq,fmin,fmax,fft_n,fft_ref_n,snr_limit=snr)
+    
+    return meas_tstar,meas_tstar_error
+    
+        
 if __name__=="__main__":
     
     #Define a brune source spectra for two different attenuations
