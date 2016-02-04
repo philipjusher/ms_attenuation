@@ -16,7 +16,7 @@ import statsmodels.api as sm
 from mtspec import mtspec
 from readrotate import readandrotate
 from obspy.core import read,Stream
-    
+import matplotlib.pyplot as plt
 def linearfit(x, y, y_weights):
     """Robust Linear Regression to fit of x and y a straight line and return the gradient with an error
     
@@ -38,12 +38,13 @@ def linearfit(x, y, y_weights):
     conf=rlm_results.conf_int()
     grad=rlm_results.params[0]
     grad_err=grad-conf[0][0]
-    return grad,grad_err
+
+    return grad,grad_err,rlm_results
 
 
             
    
-def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,trace_noise_spectra,snr_limit=1):
+def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,ref_noise_spectra,snr_limit=1):
     """Returns delta t star between the two traces (trace and ref)
     
     This is an implementation of the log spectral ratio method to measure delta
@@ -64,7 +65,7 @@ def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,trace_no
     
     #Calculate the snr, lsr and y weights for the trace and the reference
     snr=trace_spectra/trace_noise_spectra
-    snr_ref=ref_spectra/trace_noise_spectra
+    snr_ref=ref_spectra/ref_noise_spectra
     lsr=np.log(trace_spectra/ref_spectra)
     y_weights=(snr+snr_ref)/2 
     
@@ -72,14 +73,14 @@ def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,trace_no
     ind=(freq>fmin) & (freq<fmax) & (snr>snr_limit) & (snr_ref>snr_limit) & np.isfinite(lsr) 
     if sum(ind)>6:
         
-        grad,grad_err=linearfit(freq[ind],lsr[ind],y_weights[ind])              
+        grad,grad_err,linefit=linearfit(freq[ind],lsr[ind],y_weights[ind])              
         meas_tstar=grad/-np.pi
         meas_tstar_error=grad_err/-np.pi
     else:
         meas_tstar=np.nan
         meas_tstar_error=np.nan
     
-    return meas_tstar,meas_tstar_error
+    return meas_tstar,meas_tstar_error,linefit
 
 def cross_correlate(trace1,trace2):
     """Returns the correlation coefficient from two obspy traces"""
@@ -140,8 +141,11 @@ def get_and_check_window_len(st,st2):
     
     return len_st[0]
     
-def dts_p(evnm1,evnm_ref,fmin,fmax,snr,station='001',p_before=0.1,p_after=0.2):
+def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False):
     
+
+    output_linefit=True
+
     #Reading in the Events
     st = readandrotate(evnm1,stns=station,ext='[E,N,Z]')
     st_ref = readandrotate(evnm_ref,stns=station,ext='[E,N,Z]')
@@ -156,7 +160,7 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr,station='001',p_before=0.1,p_after=0.2):
     
     # Slice of the P-wave windows
     st_p = window_trace(st,p_before,p_after)
-    st_ref_p = window_trace(st,p_before,p_after)
+    st_ref_p = window_trace(st_ref,p_before,p_after)
     
     assert len(st_p) != 0
     assert len(st_ref_p) != 0
@@ -177,10 +181,102 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr,station='001',p_before=0.1,p_after=0.2):
     fft_ref_n,freq = calc_mtspec(st_ref_n[0])
     
     
-    meas_tstar,meas_tstar_error = bs_lsr(fft_p,
-            fft_ref_p,freq,fmin,fmax,fft_n,fft_ref_n,snr_limit=snr)
+    meas_tstar,meas_tstar_error,linefit = bs_lsr(fft_p,
+            fft_ref_p,freq,fmin,fmax,fft_n,fft_ref_n,snr_limit=snr_limit)
     
-    return meas_tstar,meas_tstar_error
+    if diagnostic_plot:
+        plt.figure(figsize=(8,12))
+        
+        # --------------- #
+        plt.subplot(5,2,1)
+        plt.title('Event Whole Trace')
+        plt.plot(st[0].times(),st[0].data)
+        ppick = st[0].stats.sac.t0
+        plt.axvspan(ppick-p_before,ppick+p_after,color='r',alpha=0.5)
+        plt.xlabel('Time (sec)')
+        plt.ylabel('Amplitude')
+        # --------------- #
+        plt.subplot(5,2,2)
+        plt.title('Reference Whole Trace')
+        plt.plot(st_ref[0].times(),st_ref[0].data,'g')
+        ppick = st_ref[0].stats.sac.t0
+        plt.axvspan(ppick-p_before,ppick+p_after,color='r',alpha=0.5)
+        plt.xlabel('Time (sec)')
+        plt.ylabel('Amplitude')
+        
+        # --------------- #
+        plt.subplot(6,2,3)
+        plt.title('Trace Window')
+        plt.plot(st_p[0].times(),st_p[0].data,label='P-wave')
+        plt.plot(st_n[0].times(),st_n[0].data,'r',label='Noise')
+        plt.xlabel('Time (sec)')
+        plt.ylabel('Amplitude')
+        
+        # --------------- #
+        plt.subplot(6,2,4)
+        plt.title('Reference Window')
+        plt.plot(st_ref_p[0].times(),st_ref_p[0].data,'g',label='P-wave')
+        plt.plot(st_ref_n[0].times(),st_ref_n[0].data,'r',label='Noise')
+        plt.xlabel('Time (sec)') 
+        plt.ylabel('Amplitude')
+        
+        # --------------- #
+        plt.subplot(6,2,5)
+        plt.title('Trace FFT')
+        plt.semilogy(freq,fft_p)
+        plt.semilogy(freq,fft_n,'r')
+        plt.xlabel('Freq (Hz)')
+        plt.ylabel('Amplitude')
+        
+        # --------------- #
+        plt.subplot(6,2,6)
+        plt.title('Reference FFT')
+        plt.semilogy(freq,fft_ref_p,'g')
+        plt.semilogy(freq,fft_ref_n,'r') 
+        plt.xlabel('Freq (Hz)')
+        plt.ylabel('Amplitude')
+        
+        # --------------- #
+        plt.subplot(6,2,7)
+        plt.title('Log-spectral-ratio')
+        plt.plot(freq,np.log(fft_p/fft_ref_p))
+        plt.axvspan(fmin,fmax,color='r',alpha=0.5)             
+        plt.xlabel('Freq (Hz)')
+        plt.ylabel('LSR')
+        
+        ind = (freq>fmin) & (freq<fmax)
+        linefit_freq = freq[ind]
+        line = linefit_freq*linefit.params[0]+linefit.params[1]
+        
+        plt.plot(linefit_freq,line,'-w')
+        # --------------- #
+        plt.subplot(6,2,8)
+        plt.title('Signal/Noise')
+        snr=fft_p/fft_n
+        snr_ref=fft_ref_p/fft_ref_n
+        plt.semilogy(freq,snr)
+        plt.semilogy(freq,snr_ref,'g')
+        plt.axhline(snr_limit,color='r',ls='--')
+        plt.xlabel('Freq (Hz)')        
+        plt.ylabel('SNR')
+        
+        # --------------- #
+        
+        # --------------- #
+        plt.subplot(3,1,3)
+        plt.title('LSR in frequency band')
+        plt.plot(freq,np.log(fft_p/fft_ref_p))
+        plt.axvspan(fmin,fmax,color='r',alpha=0.5)             
+        plt.xlabel('Freq (Hz)')
+        plt.ylabel('LSR')
+        plt.plot(linefit_freq,line,'-w')
+        extra = 0.1*(fmax-fmin)
+        plt.xlim(fmin-extra,fmax+extra)
+        #TODO autoscale y axis
+        # --------------- #
+        plt.tight_layout()
+        
+    return meas_tstar,meas_tstar_error,linefit
     
         
 if __name__=="__main__":
