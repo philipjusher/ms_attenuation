@@ -44,7 +44,7 @@ def linearfit(x, y, y_weights):
 
             
    
-def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,ref_noise_spectra,snr_limit=1):
+def bs_lsr(trace_spectra,ref_spectra,trace_noise_spectra,ref_noise_spectra):
     """Returns delta t star between the two traces (trace and ref)
     
     This is an implementation of the log spectral ratio method to measure delta
@@ -67,13 +67,16 @@ def bs_lsr(trace_spectra,ref_spectra,freq,fmin,fmax,trace_noise_spectra,ref_nois
     snr=trace_spectra/trace_noise_spectra
     snr_ref=ref_spectra/ref_noise_spectra
     lsr=np.log(trace_spectra/ref_spectra)
-    y_weights=(snr+snr_ref)/2 
+    weights=(snr+snr_ref)/2 
     
+    return lsr,weights
+    
+def calc_dts(lsr,weights,freq,fmin,fmax,snr_limit=1):
     #Indices at which to do the line fitting if there is not enough points return nan
-    ind=(freq>fmin) & (freq<fmax) & (snr>snr_limit) & (snr_ref>snr_limit) & np.isfinite(lsr) 
+    ind=(freq>fmin) & (freq<fmax) & (weights>snr_limit) & np.isfinite(lsr) 
     if sum(ind)>6:
         
-        grad,grad_err,linefit=linearfit(freq[ind],lsr[ind],y_weights[ind])              
+        grad,grad_err,linefit=linearfit(freq[ind],lsr[ind],weights[ind])              
         meas_tstar=grad/-np.pi
         meas_tstar_error=grad_err/-np.pi
     else:
@@ -181,8 +184,9 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
     fft_ref_n,freq = calc_mtspec(st_ref_n[0])
     
     
-    meas_tstar,meas_tstar_error,linefit = bs_lsr(fft_p,
-            fft_ref_p,freq,fmin,fmax,fft_n,fft_ref_n,snr_limit=snr_limit)
+    lsr, weights = bs_lsr(fft_p,fft_ref_p,fft_n,fft_ref_n)
+    
+    meas_tstar,meas_tstar_error,linefit = calc_dts(lsr, weights,freq,fmin,fmax,snr_limit=snr_limit)
     
     if diagnostic_plot:
         plt.figure(figsize=(8,12))
