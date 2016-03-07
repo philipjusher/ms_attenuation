@@ -108,7 +108,8 @@ def picker(st):
                     stcut.sort()
                 
                     azi,inc,lin,plan=flinn(stcut)
-                    print "inc, lin =", inc, lin
+                    
+                    #print "inc, lin =", inc, lin
                     if inc<40 and lin>0.6:
                         
                         # good enough for a p-pick
