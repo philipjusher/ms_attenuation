@@ -31,12 +31,14 @@ class Station:
         self.cmp2vect = cmp2vect
         self.cmp3vect = cmp3vect
         
-def plot_clusters(X,labels):
+def plot_clusters(X,db):
     """
     Function to plot clusters found from DBSCAN
     """
+    core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
+    core_samples_mask[db.core_sample_indices_] = True
     # Black removed and is used for noise instead.
-    unique_labels = set(labels)
+    unique_labels = set(db.labels_)
     colors = plt.cm.Spectral(np.linspace(0, 1, len(unique_labels)))
     fig=plt.figure()
     ax=fig.add_subplot(111,projection='3d')
@@ -71,7 +73,8 @@ if __name__ == '__main__':
         time=dt.datetime.strptime(event['date']+' '+event['time'],'%d/%m/%y %H:%M:%S')
         tmpevent=MicroSeisEvent(time,event['evn'],event['eve'],event['evdp'],mag=event['mag'],srcrad=event['srcrad'])
         events.append(tmpevent)
-
+        #print tmpevent.evtime
+    
     # Get station info    
     fname=os.path.join(HeaderDir,'Sensor-Information.txt')
     colnames=('stname,stn,ste,stdp,sens,tmp1,tmp2,flo,fhi,gain,sensitivity,orient_N,orient_E,orient_D')
@@ -111,39 +114,58 @@ if __name__ == '__main__':
             HypoDist.append(np.sqrt((largeev.evdp-stat.dp)**2. + EpiDist**2))
     #print min(HypoDist), max(HypoDist)
     maxdist=max(HypoDist)/10.
+    
+    # Create synthetic data for testing
     #X = np.random.rand(500,3)
 
-    X = np.array([[i.eve,i.evn,i.evdp] for i in events])
-    print type(X)
-    print np.shape(X)
+    # Array of event locations
+    #print np.array([[i.evtime] for i in events])
+    
+    X = np.array([[i.evtime,i.eve,i.evn,i.evdp] for i in events])
+    #print X[:,1:4]
+
     df=pd.DataFrame(X)
+    
+    
     # Start with low min_samples (5) to ensure clusters & start with eps=0.1 & increase
     # eps is distance parameter - sets max distance between clusters
-    db = DBSCAN(eps=10.0, min_samples=5).fit(X)
-    core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
-    core_samples_mask[db.core_sample_indices_] = True
+    db = DBSCAN(eps=10.0, min_samples=25).fit(X[:,1:4])
+    
+    print db.labels_[0:20]
+    
+    #Labels tell you which cluster event is in
     labels = db.labels_
     
     from collections import Counter
     # Cluster labelled -1 are all events not in a cluster
-    print Counter(labels),'\n'
-    print df[labels==-1]
+    # Counts number of events in each cluster
+    #print Counter(labels),'\n'
+    #print df[labels==-1]
 
     # Number of clusters in labels, ignoring noise if present.
     n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-
     print('Estimated number of clusters: %d' % n_clusters_)
-    #print("Homogeneity: %0.3f" % metrics.homogeneity_score(labels_true, labels))
-    #print("Completeness: %0.3f" % metrics.completeness_score(labels_true, labels))
-    #print("V-measure: %0.3f" % metrics.v_measure_score(labels_true, labels))
-    #print("Adjusted Rand Index: %0.3f"
-    #      % metrics.adjusted_rand_score(labels_true, labels))
-    #print("Adjusted Mutual Information: %0.3f"
-    #      % metrics.adjusted_mutual_info_score(labels_true, labels))
-    #print("Silhouette Coefficient: %0.3f"
-    #      % metrics.silhouette_score(X, labels))
+    
+    # Find list of indices for events in each cluster 
+    for n in range(n_clusters_):
+        list2 = [ind for ind, x in enumerate(labels) if x==n]
+    
+    print list2
+    
+    for l in list2:
+        ename=events[l].evtime.strftime('%Y%m%d_%H%M%S')
+        print ename, events[l].eve, events[l].evn, events[l]. evdp,events[l].mag
 
-    ##############################################################################
+        
+    
     
     # Plot clusters if wanted
-    plot_clusters(X,labels)
+    #plot_clusters(X[:,1:4],db)
+    '''
+    for label in labels:
+        if label==1:
+            print np.zeros_like(label, dtype=bool)
+        #samples = np.zeros_like(label, dtype=bool)
+        #samples[db.core_sample_indices_]=True
+    '''
+    
