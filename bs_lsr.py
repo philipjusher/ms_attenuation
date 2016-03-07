@@ -144,44 +144,46 @@ def get_and_check_window_len(st,st2):
     
     return len_st[0]
     
-def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False):
+def get_fft(evnm,p_before, p_after,stns='001',ext='[E,N,Z]'):
     
-
-    output_linefit=True
-
     #Reading in the Events
-    st = readandrotate(evnm1,stns=station,ext='[E,N,Z]')
-    st_ref = readandrotate(evnm_ref,stns=station,ext='[E,N,Z]')
+    st = readandrotate(evnm,stns=stns,ext='[E,N,Z]')
     
     
     #Get the P components
     st = get_p(st)
-    st_ref = get_p(st_ref)
+
     
     assert len(st) ==1
-    assert len(st_ref) ==1
+
     
     # Slice of the P-wave windows
     st_p = window_trace(st,p_before,p_after)
-    st_ref_p = window_trace(st_ref,p_before,p_after)
+
     
     assert len(st_p) != 0
-    assert len(st_ref_p) != 0
-    
-    # Finds the length of P window in samples and checks all the windows are the same length
-    window_len_samples = get_and_check_window_len(st_p,st_ref_p)
+
+
     window_len_time = p_before + p_after
     # Calculates the noise window
     # Note uses the beginning of the trace if the P wave is near the beginning it will overlap
     st_n = noise_window_trace(st,window_len_time)
-    st_ref_n = noise_window_trace(st,window_len_time)
     
     #Calulate power spectral density of P,Noise for event and reference
     fft_p,freq = calc_mtspec(st_p[0])
     fft_n,freq = calc_mtspec(st_n[0])
+        
+    return(fft_p,fft_n,freq,st,st_p,st_n)
     
-    fft_ref_p,freq = calc_mtspec(st_ref_p[0])
-    fft_ref_n,freq = calc_mtspec(st_ref_n[0])
+def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False):
+    
+    fft_p,fft_n,freq,st,st_p,st_n= get_fft(evnm1,p_before, p_after,stns=station,ext='[E,N,Z]')
+    fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n = get_fft(evnm_ref,p_before, p_after,stns=station,ext='[E,N,Z]')
+    
+    assert all(freq == freq_ref)
+    length = len(fft_p)
+    assert all(len(lst) == length for lst in [fft_ref_p,fft_n,fft_ref_n])
+    
     
     
     lsr, weights = bs_lsr(fft_p,fft_ref_p,fft_n,fft_ref_n)
