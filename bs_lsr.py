@@ -175,8 +175,7 @@ def get_fft(evnm,p_before, p_after,stns='001',ext='[E,N,Z]'):
         
     return(fft_p,fft_n,freq,st,st_p,st_n)
     
-def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False):
-    
+def get_lsr_and_fft(evnm1,evnm_ref,p_before, p_after,station):
     fft_p,fft_n,freq,st,st_p,st_n= get_fft(evnm1,p_before, p_after,stns=station,ext='[E,N,Z]')
     fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n = get_fft(evnm_ref,p_before, p_after,stns=station,ext='[E,N,Z]')
     
@@ -185,8 +184,15 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
     assert all(len(lst) == length for lst in [fft_ref_p,fft_n,fft_ref_n])
     
     
-    
     lsr, weights = bs_lsr(fft_p,fft_ref_p,fft_n,fft_ref_n)
+
+    return lsr,weights,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n
+    
+def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False):
+    
+    lsr,weights,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n = get_lsr_and_fft(evnm1,evnm_ref,
+                                        p_before, p_after,station)
+                                        
     
     meas_tstar,meas_tstar_error,linefit = calc_dts(lsr, weights,freq,fmin,fmax,snr_limit=snr_limit)
     
