@@ -14,9 +14,14 @@ And coded into python by Philip Usher (University of Bristol)
 import numpy as np
 import statsmodels.api as sm
 from mtspec import mtspec
-from readrotate import readandrotate
+from readrotate import readandrotate,calc_geoinc,fixchannels
 from obspy.core import read,Stream
 import matplotlib.pyplot as plt
+from glob import glob
+from os import path
+
+
+
 def linearfit(x, y, y_weights):
     """Robust Linear Regression to fit of x and y a straight line and return the gradient with an error
     
@@ -188,7 +193,7 @@ def get_lsr_and_fft(evnm1,evnm_ref,p_before, p_after,station):
 
     return lsr,weights,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n
     
-def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False):
+def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False,return_linefit=False):
     
     lsr,weights,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n = get_lsr_and_fft(evnm1,evnm_ref,
                                         p_before, p_after,station)
@@ -287,10 +292,82 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         #TODO autoscale y axis
         # --------------- #
         plt.tight_layout()
-        
-    return meas_tstar,meas_tstar_error,linefit
     
-        
+    if return_linefit:
+        return meas_tstar,meas_tstar_error,linefit
+    else:
+        return meas_tstar,meas_tstar_error
+
+
+def get_files(folder,well='K_Well',station = '001'):
+    #Get a list of stems from a fodler
+    pattern = path.join(folder,'*','K_Well','*.'+station+'.E')
+    files = glob(pattern)
+    out_files = [path.splitext(path.splitext(fname)[0])[0] for fname in files]
+
+    return out_files
+
+def calc_multi_lsr(folder,station = '001', p_before = 0.1, p_after = 0.2):
+    filenames = get_files(folder)
+    
+    #A loop comparing every event to every other one but only once
+    for i in range(0,len(filenames)):
+        for j in range(i,len(filenames)):
+            evnm1=filenames[i]
+            evnm_ref = filenames[j]
+            lsrs = get_lsr_and_fft(evnm1,evnm_ref,p_before, p_after,station)
+            lsr = lsrs[0]
+            freq = lsrs[4]
+            dx = freq[1]-freq[0]
+            
+            curvature = np.gradient(np.gradient(lsr, dx),dx)
+            plt.plot(freq,curvature)
+    plt.title('Picking the best frequency range - where the curvature is close to zero')
+    plt.xlabel('Frequency')
+    plt.ylabel('Curvature')
+    plt.tight_layout()
+            
+    return plt.gcf()
+
+def calc_multi_dts(folder,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2):
+    filenames = get_files(folder)
+
+
+    all_dts = np.zeros((len(filenames),len(filenames)))
+    all_dts_error = np.zeros((len(filenames),len(filenames)))       
+    #A loop comparing every event to every other one but only once    
+    for i in range(0,len(filenames)):
+        #Can cut this loop down if we are confident the matrix is symetrical about the diagonal
+        for j in range(0,len(filenames)):
+            evnm1=filenames[i]
+            evnm_ref = filenames[j]
+            delta_t_star,delta_t_error = dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station=station,p_before=p_before,p_after=p_after)
+            all_dts[i,j] = delta_t_star
+            all_dts_error[i,j] = delta_t_error
+            
+    return all_dts,all_dts_error,filenames
+ 
+def get_distance(evnm1):
+    station = '001'
+    ext='[E,N,Z]'
+    st = read(evnm1+'.'+station+'.'+ext)
+    # fix the chgannel components if they are not 3 characters long (stupidly required for rotating)
+    fixchannels(st)
+    # copy stream
+    strot = st.copy()
+    sttmp = strot.select(station=station)
+    azi,inc,baz,hypodist,epidist,stdp=calc_geoinc(sttmp[0])
+    return hypodist
+
+def get_time(evnm1):
+    station = '001'
+    ext='Z'
+    st = read(evnm1+'.'+station+'.'+ext)
+    # fix the chgannel components if they are not 3 characters long (stupidly required for rotating)
+    tr=st[0]
+    
+    return tr.stats.starttime
+       
 if __name__=="__main__":
     
     #Define a brune source spectra for two different attenuations
