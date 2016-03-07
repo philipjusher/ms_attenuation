@@ -14,7 +14,7 @@ And coded into python by Philip Usher (University of Bristol)
 import numpy as np
 import statsmodels.api as sm
 from mtspec import mtspec
-from readrotate import readandrotate,calc_geoinc,fixchannels
+from readrotate import readandrotate,calc_geoinc,fixchannels,picker
 from obspy.core import read,Stream
 import matplotlib.pyplot as plt
 from glob import glob
@@ -74,11 +74,11 @@ def bs_lsr(trace_spectra,ref_spectra,trace_noise_spectra,ref_noise_spectra):
     lsr=np.log(trace_spectra/ref_spectra)
     weights=(snr+snr_ref)/2 
     
-    return lsr,weights
+    return lsr,weights,snr,snr_ref
     
-def calc_dts(lsr,weights,freq,fmin,fmax,snr_limit=1):
+def calc_dts(lsr,weights,snr,snr_ref,freq,fmin,fmax,snr_limit=1):
     #Indices at which to do the line fitting if there is not enough points return nan
-    ind=(freq>fmin) & (freq<fmax) & (weights>snr_limit) & np.isfinite(lsr) 
+    ind=(freq>fmin) & (freq<fmax) & (snr>snr_limit) & (snr_ref>snr_limit) & np.isfinite(lsr) 
     if sum(ind)>6:
         
         grad,grad_err,linefit=linearfit(freq[ind],lsr[ind],weights[ind])              
@@ -87,7 +87,8 @@ def calc_dts(lsr,weights,freq,fmin,fmax,snr_limit=1):
     else:
         meas_tstar=np.nan
         meas_tstar_error=np.nan
-    
+        linefit = None
+        
     return meas_tstar,meas_tstar_error,linefit
 
 def cross_correlate(trace1,trace2):
@@ -154,14 +155,25 @@ def get_fft(evnm,p_before, p_after,stns='001',ext='[E,N,Z]'):
     #Reading in the Events
     st = readandrotate(evnm,stns=stns,ext='[E,N,Z]')
     
-    
-    #Get the P components
-    st = get_p(st)
+    # Removing this we are going to use multiple traces and stack them
+    ##Get the P components
+    #st = get_p(st)
+    #assert len(st) ==1
 
+    # Calculate P picks
+    st_filt = st.copy()
+    st_filt = st.filter('bandpass',freqmin=20.0,freqmax=200.0)
+    p_pick, s_picks = picker(st_filt)
     
-    assert len(st) ==1
-
-    
+    #Set P picks to sac header this is probably bad style
+    if not(np.isnan(p_pick)):
+        for tr in st:
+            tr.stats.sac.t0 = p_pick
+    else:
+        for tr in st:
+            tr.stats.sac.t0 = -12345.0
+     
+     
     # Slice of the P-wave windows
     st_p = window_trace(st,p_before,p_after)
 
@@ -175,8 +187,16 @@ def get_fft(evnm,p_before, p_after,stns='001',ext='[E,N,Z]'):
     st_n = noise_window_trace(st,window_len_time)
     
     #Calulate power spectral density of P,Noise for event and reference
-    fft_p,freq = calc_mtspec(st_p[0])
-    fft_n,freq = calc_mtspec(st_n[0])
+    fft_p = np.zeros(len(st_n[0])+1)    
+    fft_n = np.zeros(len(st_n[0])+1) 
+    
+    for i in range(3):   
+        fft_p_cmp,freq = calc_mtspec(st_p[i])
+        fft_n_cmp,freq = calc_mtspec(st_n[i])
+        
+        
+        fft_p += fft_p_cmp
+        fft_n += fft_n_cmp
         
     return(fft_p,fft_n,freq,st,st_p,st_n)
     
@@ -189,23 +209,24 @@ def get_lsr_and_fft(evnm1,evnm_ref,p_before, p_after,station):
     assert all(len(lst) == length for lst in [fft_ref_p,fft_n,fft_ref_n])
     
     
-    lsr, weights = bs_lsr(fft_p,fft_ref_p,fft_n,fft_ref_n)
+    lsr,weights,snr,snr_ref = bs_lsr(fft_p,fft_ref_p,fft_n,fft_ref_n)
 
-    return lsr,weights,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n
+    return lsr,weights,snr,snr_ref,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n
     
-def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=0.2,diagnostic_plot=False,return_linefit=False):
+def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.0125, p_after=0.0375,diagnostic_plot=False,return_linefit=False):
     
-    lsr,weights,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n = get_lsr_and_fft(evnm1,evnm_ref,
+    lsr,weights,snr,snr_ref,fft_p,fft_n,freq,st,st_p,st_n,fft_ref_p,fft_ref_n,freq_ref,st_ref,st_ref_p,st_ref_n = get_lsr_and_fft(evnm1,evnm_ref,
                                         p_before, p_after,station)
                                         
     
-    meas_tstar,meas_tstar_error,linefit = calc_dts(lsr, weights,freq,fmin,fmax,snr_limit=snr_limit)
+    meas_tstar,meas_tstar_error,linefit = calc_dts(lsr,weights,snr,snr_ref,freq,fmin,fmax,snr_limit=snr_limit)
     
     if diagnostic_plot:
         plt.figure(figsize=(8,12))
         
         # --------------- #
-        plt.subplot(5,2,1)
+        plt.subplot2grid((6,2), (0,0))        
+        #plt.subplot(6,2,1)
         plt.title('Event Whole Trace')
         plt.plot(st[0].times(),st[0].data)
         ppick = st[0].stats.sac.t0
@@ -213,7 +234,8 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         plt.xlabel('Time (sec)')
         plt.ylabel('Amplitude')
         # --------------- #
-        plt.subplot(5,2,2)
+        plt.subplot2grid((6,2), (0,1))
+        #plt.subplot(6,2,2)
         plt.title('Reference Whole Trace')
         plt.plot(st_ref[0].times(),st_ref[0].data,'g')
         ppick = st_ref[0].stats.sac.t0
@@ -222,7 +244,8 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         plt.ylabel('Amplitude')
         
         # --------------- #
-        plt.subplot(6,2,3)
+        plt.subplot2grid((6,2), (1,0))        
+        #plt.subplot(6,2,3)
         plt.title('Trace Window')
         plt.plot(st_p[0].times(),st_p[0].data,label='P-wave')
         plt.plot(st_n[0].times(),st_n[0].data,'r',label='Noise')
@@ -230,7 +253,8 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         plt.ylabel('Amplitude')
         
         # --------------- #
-        plt.subplot(6,2,4)
+        plt.subplot2grid((6,2), (1,1))      
+        #plt.subplot(6,2,4)
         plt.title('Reference Window')
         plt.plot(st_ref_p[0].times(),st_ref_p[0].data,'g',label='P-wave')
         plt.plot(st_ref_n[0].times(),st_ref_n[0].data,'r',label='Noise')
@@ -238,7 +262,8 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         plt.ylabel('Amplitude')
         
         # --------------- #
-        plt.subplot(6,2,5)
+        plt.subplot2grid((6,2), (2,0))        
+        #plt.subplot(6,2,5)
         plt.title('Trace FFT')
         plt.semilogy(freq,fft_p)
         plt.semilogy(freq,fft_n,'r')
@@ -246,7 +271,8 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         plt.ylabel('Amplitude')
         
         # --------------- #
-        plt.subplot(6,2,6)
+        plt.subplot2grid((6,2), (2,1))
+        #plt.subplot(6,2,6)
         plt.title('Reference FFT')
         plt.semilogy(freq,fft_ref_p,'g')
         plt.semilogy(freq,fft_ref_n,'r') 
@@ -254,7 +280,8 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         plt.ylabel('Amplitude')
         
         # --------------- #
-        plt.subplot(6,2,7)
+        plt.subplot2grid((6,2), (3,0))
+        #plt.subplot(6,2,7)
         plt.title('Log-spectral-ratio')
         plt.plot(freq,np.log(fft_p/fft_ref_p))
         plt.axvspan(fmin,fmax,color='r',alpha=0.5)             
@@ -263,11 +290,13 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         
         ind = (freq>fmin) & (freq<fmax)
         linefit_freq = freq[ind]
-        line = linefit_freq*linefit.params[0]+linefit.params[1]
-        
-        plt.plot(linefit_freq,line,'-w')
+        if linefit:
+            line = linefit_freq*linefit.params[0]+linefit.params[1]
+            plt.plot(linefit_freq,line,'-w')
+
         # --------------- #
-        plt.subplot(6,2,8)
+        plt.subplot2grid((6,2), (3,1))
+        #plt.subplot(6,2,8)
         plt.title('Signal/Noise')
         snr=fft_p/fft_n
         snr_ref=fft_ref_p/fft_ref_n
@@ -280,13 +309,18 @@ def dts_p(evnm1,evnm_ref,fmin,fmax,snr_limit,station='001',p_before=0.1,p_after=
         # --------------- #
         
         # --------------- #
-        plt.subplot(3,1,3)
+        ax = plt.subplot2grid((6,2), (4,0),colspan=2,rowspan=2)
+        #plt.subplot(3,1,3)
         plt.title('LSR in frequency band')
         plt.plot(freq,np.log(fft_p/fft_ref_p))
         plt.axvspan(fmin,fmax,color='r',alpha=0.5)             
         plt.xlabel('Freq (Hz)')
         plt.ylabel('LSR')
-        plt.plot(linefit_freq,line,'-w')
+        if linefit:        
+            plt.plot(linefit_freq,line,'-w')
+        else:
+            ax.text(0.5, 0.5, """There was no line fitting probably 
+            not enought "good" points""",fontsize = 24, ha='center', va='center',transform = ax.transAxes)
         extra = 0.1*(fmax-fmin)
         plt.xlim(fmin-extra,fmax+extra)
         #TODO autoscale y axis
@@ -307,7 +341,7 @@ def get_files(folder,well='K_Well',station = '001'):
 
     return out_files
 
-def calc_multi_lsr(folder,station = '001', p_before = 0.1, p_after = 0.2):
+def calc_multi_lsr(folder,station = '001', p_before = 0.0125, p_after = 0.0375):
     filenames = get_files(folder)
     
     #A loop comparing every event to every other one but only once
@@ -317,7 +351,7 @@ def calc_multi_lsr(folder,station = '001', p_before = 0.1, p_after = 0.2):
             evnm_ref = filenames[j]
             lsrs = get_lsr_and_fft(evnm1,evnm_ref,p_before, p_after,station)
             lsr = lsrs[0]
-            freq = lsrs[4]
+            freq = lsrs[6]
             dx = freq[1]-freq[0]
             
             curvature = np.gradient(np.gradient(lsr, dx),dx)
