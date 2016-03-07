@@ -2,6 +2,12 @@ import numpy as np
 
 from obspy import read
 
+from obspy.signal.polarization import flinn
+from obspy.signal.trigger import zDetect, triggerOnset, plotTrigger
+
+import datetime as dt
+
+
 def calc_geoinc(trace,metric=True):
     """docstring for calc_geoinc"""
     stla=trace.stats.sac.stla
@@ -63,3 +69,77 @@ def readandrotate(stem,stns='*',ext='[E,N,Z]'):
         sttmp.rotate('ZNE->LQT',back_azimuth=baz,inclination=inc)
 
     return strot
+    
+    
+def picker(st):
+    """docstring for picker"""
+    
+    s_picks=[np.nan]*2
+    
+    df = st[0].stats.sampling_rate
+    npts = st[0].stats.npts
+    
+    for i,cmp in enumerate(['L','Q','T']):
+        tmp=st.select(component=cmp)
+        trace=tmp[0]
+        # calculate cft of zDetect for 20 sample window
+        cft=zDetect(trace,20)
+        #mincft=min(cft)
+        maxcft=max(cft)
+        #meancft=mean(cft)
+        #print mincft,maxcft,(maxcft+mincft)/2,meancft
+    
+    
+        if cmp=='L': # P-trace: care less about this one, go ahead and pick
+            picks=triggerOnset(cft,0,0)
+            
+            # plotTrigger(trace, cft, 0, 0)
+        
+            p_pick=np.nan
+            for pick,end in picks:
+                if npts-pick<100:
+                    break
+                else: 
+                    stcut = st.copy()
+                    # cut trace from pick to 100 samples past pick
+                    startcut=stcut[0].stats.starttime+dt.timedelta(seconds= pick/df)
+                    endcut=startcut + dt.timedelta(seconds=100/df)
+                    stcut = stcut.slice(startcut,endcut)
+                    stcut.sort()
+                
+                    azi,inc,lin,plan=flinn(stcut)
+                    print "inc, lin =", inc, lin
+                    if inc<40 and lin>0.6:
+                        
+                        # good enough for a p-pick
+                        p_pick=pick
+                        break
+            
+        
+        
+        else: # S-traces: only pick if the signal is relatively large
+            s_picks[i-1]=np.nan
+            if maxcft>6:
+                picks=triggerOnset(cft,4,1)
+            
+                for pick,end in picks:
+                    if npts-pick<100:
+                        break
+                    else:
+                        stcut =st.copy()
+                        # cut trace from pick to 100 samples past pick
+                        startcut=stcut[0].stats.starttime+dt.timedelta(seconds= pick/df)
+                        endcut=startcut + dt.timedelta(seconds=100/df)
+                        stcut = stcut.slice(startcut,endcut)
+                        stcut.sort()
+                    
+                        azi,inc,lin,plan=flinn(stcut)
+                        if inc>50 and lin>0.75:
+                            # good enough for an s-pick
+                            s_picks[i-1]=pick
+                            break
+
+    s_pick=np.nanmin(s_picks)
+
+    return (p_pick-50)/df,[(i-50)/df for i in s_picks]
+
